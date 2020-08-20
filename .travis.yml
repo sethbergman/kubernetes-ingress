@@ -1,5 +1,7 @@
 language: go
-sudo: required
+os: linux
+dist: focal
+sudo: "true"
 services:
 - docker
 go:
