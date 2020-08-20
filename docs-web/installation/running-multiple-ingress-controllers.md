@@ -38,6 +38,5 @@ Considering the options above, you can run multiple NGINX Ingress Controllers, e
 
 ## See Also
 
-* [Command-line arguments](/nginx-ingress-controller/configuration/global-configuration/command-line-arguments)
-
-**Note**: all mentioned command-line arguments are also available as the parameters in the [Helm chart](/nginx-ingress-controller/installation/installation-with-helm).
+* [Command-line arguments](/docs-web/configuration/global-configuration/command-line-arguments.md)
+**Note**: all mentioned command-line arguments are also available as the parameters in the [Helm chart](/docs-web/installation/installation-with-helm.md).
