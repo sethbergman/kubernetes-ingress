@@ -1,7 +1,6 @@
 language: go
 os: linux
-dist: focal
-sudo: "true"
+dist: xenial
 services:
 - docker
 go:
