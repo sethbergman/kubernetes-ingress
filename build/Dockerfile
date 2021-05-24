@@ -118,7 +118,7 @@ COPY --chown=nginx:0 build/log-default.json /etc/nginx
 
 
 ############################################# Base image for Openshift #############################################
-FROM registry.access.redhat.com/ubi8/ubi:8.3 AS openshift-base
+FROM registry.access.redhat.com/ubi8/ubi:8.4 AS openshift-base
 
 LABEL name="NGINX Ingress Controller" \
 	description="The Ingress controller is an application that runs in a cluster and configures an HTTP load balancer according to Ingress resources." \
