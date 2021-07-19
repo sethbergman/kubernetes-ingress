@@ -288,7 +288,7 @@ ENTRYPOINT ["/nginx-ingress"]
 
 
 ############################################# Build nginx-ingress in golang container #############################################
-FROM golang:1.16-alpine AS builder
+FROM golang:1.16.6-alpine AS builder
 ARG VERSION
 ARG GIT_COMMIT
 WORKDIR /go/src/github.com/nginxinc/kubernetes-ingress/nginx-ingress/cmd/nginx-ingress
