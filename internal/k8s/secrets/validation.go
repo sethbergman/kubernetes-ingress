@@ -19,13 +19,13 @@ const CAKey = "ca.crt"
 // ClientSecretKey is the key of the data field of a Secret where the OIDC client secret must be stored.
 const ClientSecretKey = "client-secret"
 
-// SecretTypeCA contains a certificate authority for TLS certificate verification.
+// SecretTypeCA contains a certificate authority for TLS certificate verification. #nosec G101
 const SecretTypeCA api_v1.SecretType = "nginx.org/ca"
 
-// SecretTypeJWK contains a JWK (JSON Web Key) for validating JWTs (JSON Web Tokens).
+// SecretTypeJWK contains a JWK (JSON Web Key) for validating JWTs (JSON Web Tokens). #nosec G101
 const SecretTypeJWK api_v1.SecretType = "nginx.org/jwk"
 
-// SecretTypeOIDC contains an OIDC client secret for use in oauth flows.
+// SecretTypeOIDC contains an OIDC client secret for use in oauth flows. #nosec G101
 const SecretTypeOIDC api_v1.SecretType = "nginx.org/oidc"
 
 // ValidateTLSSecret validates the secret. If it is valid, the function returns nil.
@@ -38,7 +38,7 @@ func ValidateTLSSecret(secret *api_v1.Secret) error {
 
 	_, err := tls.X509KeyPair(secret.Data[api_v1.TLSCertKey], secret.Data[api_v1.TLSPrivateKeyKey])
 	if err != nil {
-		return fmt.Errorf("Failed to validate TLS cert and key: %v", err)
+		return fmt.Errorf("Failed to validate TLS cert and key: %w", err)
 	}
 
 	return nil
@@ -80,7 +80,7 @@ func ValidateCASecret(secret *api_v1.Secret) error {
 
 	_, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return fmt.Errorf("Failed to validate certificate: %v", err)
+		return fmt.Errorf("Failed to validate certificate: %w", err)
 	}
 
 	return nil

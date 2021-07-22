@@ -201,7 +201,7 @@ func (s appProtectUserSigSlice) Swap(i, j int) {
 }
 
 func createAppProtectPolicyEx(policyObj *unstructured.Unstructured) (*PolicyEx, error) {
-	err := ValidateAppProtectPolicy(policyObj)
+	err := validateAppProtectPolicy(policyObj)
 	if err != nil {
 		errMsg := fmt.Sprintf("Error validating policy %s: %v", policyObj.GetName(), err)
 		return &PolicyEx{Obj: policyObj, IsValid: false, ErrorMsg: failedValidationErrorMsg}, fmt.Errorf(errMsg)
@@ -255,7 +255,7 @@ func buildRevTimes(requirement map[string]interface{}) (RevTimes, error) {
 }
 
 func createAppProtectLogConfEx(logConfObj *unstructured.Unstructured) (*LogConfEx, error) {
-	err := ValidateAppProtectLogConf(logConfObj)
+	err := validateAppProtectLogConf(logConfObj)
 	if err != nil {
 		return &LogConfEx{
 			Obj:      logConfObj,
@@ -288,15 +288,18 @@ func createAppProtectUserSigEx(userSigObj *unstructured.Unstructured) (*UserSigE
 			errMsg := invalidTimestampErrorMsg
 			return &UserSigEx{Obj: userSigObj, IsValid: false, ErrorMsg: errMsg}, fmt.Errorf(errMsg)
 		}
-		return &UserSigEx{Obj: userSigObj,
+		return &UserSigEx{
+			Obj:     userSigObj,
 			Tag:     sTag,
 			RevTime: &revTime,
-			IsValid: true}, nil
+			IsValid: true,
+		}, nil
 	}
 	return &UserSigEx{
 		Obj:     userSigObj,
 		Tag:     sTag,
-		IsValid: true}, nil
+		IsValid: true,
+	}, nil
 }
 
 func isReqSatisfiedByUserSig(sigReq SignatureReq, sig *UserSigEx) bool {

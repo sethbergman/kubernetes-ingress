@@ -99,7 +99,7 @@ func TestValidateTransportServerUpstreams(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		allErrs, resultUpstreamNames := validateTransportServerUpstreams(test.upstreams, field.NewPath("upstreams"))
+		allErrs, resultUpstreamNames := validateTransportServerUpstreams(test.upstreams, field.NewPath("upstreams"), true)
 		if len(allErrs) > 0 {
 			t.Errorf("validateTransportServerUpstreams() returned errors %v for valid input for the case of %s", allErrs, test.msg)
 		}
@@ -173,7 +173,7 @@ func TestValidateTransportServerUpstreamsFails(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		allErrs, resultUpstreamNames := validateTransportServerUpstreams(test.upstreams, field.NewPath("upstreams"))
+		allErrs, resultUpstreamNames := validateTransportServerUpstreams(test.upstreams, field.NewPath("upstreams"), true)
 		if len(allErrs) == 0 {
 			t.Errorf("validateTransportServerUpstreams() returned no errors for the case of %s", test.msg)
 		}
@@ -202,6 +202,120 @@ func TestValidateTransportServerHost(t *testing.T) {
 		allErrs := validateTransportServerHost(test.host, field.NewPath("host"), test.isTLSPassthroughListener)
 		if len(allErrs) > 0 {
 			t.Errorf("validateTransportServerHost(%q, %v) returned errors %v for valid input", test.host, test.isTLSPassthroughListener, allErrs)
+		}
+	}
+}
+
+func TestValidateTransportServerLoadBalancingMethod(t *testing.T) {
+	tests := []struct {
+		method   string
+		isPlus   bool
+		hasError bool
+	}{
+		{
+			method:   "",
+			isPlus:   false,
+			hasError: false,
+		},
+		{
+			method:   "",
+			isPlus:   true,
+			hasError: false,
+		},
+		{
+			method:   "hash",
+			isPlus:   false,
+			hasError: true,
+		},
+		{
+			method:   "hash ${remote_addr}",
+			isPlus:   false,
+			hasError: false,
+		},
+		{
+			method:   "hash ${remote_addr}AAA",
+			isPlus:   false,
+			hasError: false,
+		},
+		{
+			method:   `hash ${remote_addr}"`,
+			isPlus:   false,
+			hasError: true,
+		},
+		{
+			method:   "hash ${invalid_var}",
+			isPlus:   false,
+			hasError: true,
+		},
+		{
+			method:   "hash not_var",
+			isPlus:   false,
+			hasError: false,
+		},
+		{
+			method:   "hash ${remote_addr} toomany",
+			isPlus:   false,
+			hasError: true,
+		},
+		{
+			method:   "hash ${remote_addr} consistent",
+			isPlus:   false,
+			hasError: false,
+		},
+		{
+			method:   "hash ${remote_addr} toomany consistent",
+			isPlus:   false,
+			hasError: true,
+		},
+		{
+			method:   "invalid",
+			isPlus:   false,
+			hasError: true,
+		},
+		{
+			method:   "least_conn",
+			isPlus:   false,
+			hasError: false,
+		},
+		{
+			method:   "random",
+			isPlus:   false,
+			hasError: false,
+		},
+		{
+			method:   "random two",
+			isPlus:   false,
+			hasError: false,
+		},
+		{
+			method:   "random two least_conn",
+			isPlus:   false,
+			hasError: false,
+		},
+		{
+			method:   "random two least_time",
+			isPlus:   false,
+			hasError: true,
+		},
+		{
+			method:   "random two least_time",
+			isPlus:   true,
+			hasError: true,
+		},
+		{
+			method:   "random two least_time=connect",
+			isPlus:   true,
+			hasError: true,
+		},
+	}
+
+	for _, test := range tests {
+		allErrs := validateLoadBalancingMethod(test.method, field.NewPath("method"), test.isPlus)
+		if !test.hasError && len(allErrs) > 0 {
+			t.Errorf("validateLoadBalancingMethod(%q, %v) returned errors %v for valid input", test.method, test.isPlus, allErrs)
+		}
+		if test.hasError && len(allErrs) < 1 {
+			t.Errorf("validateLoadBalancingMethod(%q, %v) failed to return an error for invalid input", test.method, test.isPlus)
 		}
 	}
 }
@@ -712,6 +826,99 @@ func TestValidateTransportServerActionFails(t *testing.T) {
 		allErrs := validateTransportServerAction(test.action, field.NewPath("action"), upstreamNames)
 		if len(allErrs) == 0 {
 			t.Errorf("validateTransportServerAction() returned no errors for invalid input for the case of %s", test.msg)
+		}
+	}
+}
+
+func TestValidateMatchSend(t *testing.T) {
+	validInput := []string{
+		"",
+		"abc",
+		"hello${world}",
+		`hello\x00`,
+	}
+	invalidInput := []string{
+		`hello"world`,
+		`\x1x`,
+	}
+
+	for _, send := range validInput {
+		allErrs := validateMatchSend(send, field.NewPath("send"))
+		if len(allErrs) > 0 {
+			t.Errorf("validateMatchSend(%q) returned errors %v for valid input", send, allErrs)
+		}
+	}
+	for _, send := range invalidInput {
+		allErrs := validateMatchSend(send, field.NewPath("send"))
+		if len(allErrs) == 0 {
+			t.Errorf("validateMatchSend(%q) returned no errors for invalid input", send)
+		}
+	}
+}
+
+func TestValidateHexString(t *testing.T) {
+	validInput := []string{
+		"",
+		"abc",
+		`\x00`,
+		`\xaa`,
+		`\xaA`,
+		`\xff`,
+		`\xaaFFabc\x12`,
+	}
+	invalidInput := []string{
+		`\x`,
+		`\x1`,
+		`\xax`,
+		`\x\b`,
+		`\xaaFFabc\xx12`, // \xx1 is invalid
+	}
+
+	for _, s := range validInput {
+		err := validateHexString(s)
+		if err != nil {
+			t.Errorf("validateHexString(%q) returned error %v for valid input", s, err)
+		}
+	}
+	for _, s := range invalidInput {
+		err := validateHexString(s)
+		if err == nil {
+			t.Errorf("validateHexString(%q) returned no error for invalid input", s)
+		}
+	}
+}
+
+func TestValidateMatchExpect(t *testing.T) {
+	validInput := []string{
+		``,
+		`abc`,
+		`abc\x00`,
+		`~* 200 OK`,
+		`~ 2\d\d`,
+		`~`,
+		`~*`,
+	}
+	invalidInput := []string{
+		`hello"world`,
+		`~hello"world`,
+		`~*hello"world`,
+		`\x1x`,
+		`~\x1x`,
+		`~*\x1x`,
+		`~[{`,
+		`~{1}`,
+	}
+
+	for _, input := range validInput {
+		allErrs := validateMatchExpect(input, field.NewPath("expect"))
+		if len(allErrs) > 0 {
+			t.Errorf("validateMatchExpect(%q) returned errors %v for valid input", input, allErrs)
+		}
+	}
+	for _, input := range invalidInput {
+		allErrs := validateMatchExpect(input, field.NewPath("expect"))
+		if len(allErrs) == 0 {
+			t.Errorf("validateMatchExpect(%q) returned no errors for invalid input", input)
 		}
 	}
 }

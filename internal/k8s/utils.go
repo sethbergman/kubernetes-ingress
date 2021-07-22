@@ -133,7 +133,7 @@ func (s *storeToEndpointLister) GetServiceEndpoints(svc *v1.Service) (ep v1.Endp
 // targetPort is a number, use that.  If the targetPort is a string, look that
 // string up in all named ports in all containers in the target pod.  If no
 // match is found, fail.
-func findPort(pod *v1.Pod, svcPort *v1.ServicePort) (int32, error) {
+func findPort(pod *v1.Pod, svcPort v1.ServicePort) (int32, error) {
 	portName := svcPort.TargetPort
 	switch portName.Type {
 	case intstr.String:
@@ -150,11 +150,6 @@ func findPort(pod *v1.Pod, svcPort *v1.ServicePort) (int32, error) {
 	}
 
 	return 0, fmt.Errorf("no suitable port for manifest: %s", pod.UID)
-}
-
-// storeToSecretLister makes a Store that lists Secrets
-type storeToSecretLister struct {
-	cache.Store
 }
 
 // isMinion determines is an ingress is a minion or not
@@ -193,7 +188,7 @@ func GetK8sVersion(client kubernetes.Interface) (v *version.Version, err error) 
 
 	runningVersion, err := version.ParseGeneric(serverVersion.String())
 	if err != nil {
-		return nil, fmt.Errorf("unexpected error parsing running Kubernetes version: %v", err)
+		return nil, fmt.Errorf("unexpected error parsing running Kubernetes version: %w", err)
 	}
 	glog.V(3).Infof("Kubernetes version: %v", runningVersion)
 

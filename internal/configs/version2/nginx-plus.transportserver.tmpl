@@ -2,10 +2,28 @@
 upstream {{ $u.Name }} {
     zone {{ $u.Name }} 256k;
 
-    random two least_conn;
+    {{ if $u.LoadBalancingMethod }}
+    {{ $u.LoadBalancingMethod }};
+    {{ end }}
 
     {{ range $s := $u.Servers }}
-    server {{ $s.Address }} max_fails={{ $s.MaxFails }} fail_timeout={{ $s.FailTimeout }};
+    server {{ $s.Address }} max_fails={{ $s.MaxFails }} fail_timeout={{ $s.FailTimeout }} max_conns={{ $s.MaxConnections }};
+    {{ end }}
+}
+{{ end }}
+
+{{ range $snippet := .StreamSnippets }}
+{{- $snippet }}
+{{ end }}
+
+{{ with $m := .Match }}
+match {{ $m.Name }} {
+    {{ if $m.Send }}
+    send "{{ $m.Send }}";
+    {{ end }}
+
+    {{ if $m.Expect }}
+    expect {{ $m.ExpectRegexModifier }} "{{ $m.Expect }}";
     {{ end }}
 }
 {{ end }}
@@ -28,7 +46,7 @@ server {
     proxy_responses {{ $s.ProxyResponses }};
     {{ end }}
 
-    {{ range $snippet := $s.Snippets }}
+    {{ range $snippet := $s.ServerSnippets }}
     {{- $snippet }}
     {{ end }}
 
@@ -36,7 +54,7 @@ server {
 
     {{ if $s.HealthCheck }}
     health_check interval={{ $s.HealthCheck.Interval }} port={{ $s.HealthCheck.Port }} 
-        passes={{ $s.HealthCheck.Passes }} jitter={{ $s.HealthCheck.Jitter }} fails={{ $s.HealthCheck.Fails }} {{ if $s.UDP }}udp{{ end }};
+        passes={{ $s.HealthCheck.Passes }} jitter={{ $s.HealthCheck.Jitter }} fails={{ $s.HealthCheck.Fails }}{{ if $s.UDP }} udp{{ end }}{{ if $s.HealthCheck.Match }} match={{ $s.HealthCheck.Match }}{{ end }};
     health_check_timeout {{ $s.HealthCheck.Timeout }};
     {{ end }}
 

@@ -6,19 +6,9 @@ on:
       - master
     paths-ignore:
       - 'docs/**'
-      - 'docs-web/**'
       - 'examples/**'
       - 'examples-of-custom-resources/**'
       - '**.md'
-
-defaults:
-  run:
-    shell: bash
-
-env:
-  FOSSA_VER: 1.1.0
-  FOSSA_URL: https://github.com/fossas/fossa-cli/releases/download
-  GOLANG_VERSION: 1.16
 
 jobs:
 
@@ -28,21 +18,10 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v2
-      - name: Setup Golang Environment
-        uses: actions/setup-go@v2
+      - name: Scan
+        uses: fossas/fossa-action@v1
         with:
-          go-version: '${{ env.GOLANG_VERSION }}'
-      - name: Configure Fossa CLI
-        run: |
-          wget ${{ env.FOSSA_URL }}/v${{ env.FOSSA_VER }}/fossa-cli_${{ env.FOSSA_VER }}_linux_amd64.tar.gz
-          tar xzf fossa-cli_${{ env.FOSSA_VER }}_linux_amd64.tar.gz
-          ./fossa init
-      - name: Run License Scan
-        env:
-          FOSSA_API_KEY: ${{ secrets.FOSSA_TOKEN }}
-          GO111MODULE: on
-          GOPATH: /home/runner/go
-        run: ./fossa analyze -t ${GITHUB_REPOSITORY#*/} -b ${GITHUB_REF##*/}
+          api-key: ${{ secrets.FOSSA_TOKEN }}
 
   notify:
     name: Notify

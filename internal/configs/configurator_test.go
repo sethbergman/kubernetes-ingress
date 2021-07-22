@@ -8,6 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	networking "k8s.io/api/networking/v1beta1"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/nginxinc/kubernetes-ingress/internal/configs/version1"
 	"github.com/nginxinc/kubernetes-ingress/internal/configs/version2"
@@ -40,7 +41,7 @@ func createTestConfigurator() (*Configurator, error) {
 
 	manager := nginx.NewFakeManager("/etc/nginx")
 
-	return NewConfigurator(manager, createTestStaticConfigParams(), NewDefaultConfigParams(), NewDefaultGlobalConfigParams(), templateExecutor, templateExecutorV2, false, false, nil, false, nil, false), nil
+	return NewConfigurator(manager, createTestStaticConfigParams(), NewDefaultConfigParams(), templateExecutor, templateExecutorV2, false, false, nil, false, nil, false), nil
 }
 
 func createTestConfiguratorInvalidIngressTemplate() (*Configurator, error) {
@@ -56,7 +57,7 @@ func createTestConfiguratorInvalidIngressTemplate() (*Configurator, error) {
 
 	manager := nginx.NewFakeManager("/etc/nginx")
 
-	return NewConfigurator(manager, createTestStaticConfigParams(), NewDefaultConfigParams(), NewDefaultGlobalConfigParams(), templateExecutor, &version2.TemplateExecutor{}, false, false, nil, false, nil, false), nil
+	return NewConfigurator(manager, createTestStaticConfigParams(), NewDefaultConfigParams(), templateExecutor, &version2.TemplateExecutor{}, false, false, nil, false, nil, false), nil
 }
 
 func TestAddOrUpdateIngress(t *testing.T) {
@@ -1066,5 +1067,209 @@ func TestUpdateTransportServerMetricsLabels(t *testing.T) {
 	cnf.deleteTransportServerMetricsLabels("default/test-transportserver-tls")
 	if !reflect.DeepEqual(cnf.labelUpdater, expectedLabelUpdater) {
 		t.Errorf("deleteTransportServerMetricsLabels() updated labels to \n%+v but expected \n%+v", cnf.labelUpdater, expectedLabelUpdater)
+	}
+}
+
+func TestUpdateApResources(t *testing.T) {
+	appProtectPolicy := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"namespace": "test-ns",
+				"name":      "test-name",
+			},
+		},
+	}
+	appProtectLogConf := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"namespace": "test-ns",
+				"name":      "test-name",
+			},
+		},
+	}
+	appProtectLogDst := "test-dst"
+
+	tests := []struct {
+		ingEx    *IngressEx
+		expected AppProtectResources
+		msg      string
+	}{
+		{
+			ingEx: &IngressEx{
+				Ingress: &networking.Ingress{
+					ObjectMeta: meta_v1.ObjectMeta{},
+				},
+			},
+			expected: AppProtectResources{},
+			msg:      "no app protect resources",
+		},
+		{
+			ingEx: &IngressEx{
+				Ingress: &networking.Ingress{
+					ObjectMeta: meta_v1.ObjectMeta{},
+				},
+				AppProtectPolicy: appProtectPolicy,
+			},
+			expected: AppProtectResources{
+				AppProtectPolicy: "/etc/nginx/waf/nac-policies/test-ns_test-name",
+			},
+			msg: "app protect policy",
+		},
+		{
+			ingEx: &IngressEx{
+				Ingress: &networking.Ingress{
+					ObjectMeta: meta_v1.ObjectMeta{},
+				},
+				AppProtectLogs: []AppProtectLog{
+					{
+						LogConf: appProtectLogConf,
+						Dest:    appProtectLogDst,
+					},
+				},
+			},
+			expected: AppProtectResources{
+				AppProtectLogconfs: []string{"/etc/nginx/waf/nac-logconfs/test-ns_test-name test-dst"},
+			},
+			msg: "app protect log conf",
+		},
+		{
+			ingEx: &IngressEx{
+				Ingress: &networking.Ingress{
+					ObjectMeta: meta_v1.ObjectMeta{},
+				},
+				AppProtectPolicy: appProtectPolicy,
+				AppProtectLogs: []AppProtectLog{
+					{
+						LogConf: appProtectLogConf,
+						Dest:    appProtectLogDst,
+					},
+				},
+			},
+			expected: AppProtectResources{
+				AppProtectPolicy:   "/etc/nginx/waf/nac-policies/test-ns_test-name",
+				AppProtectLogconfs: []string{"/etc/nginx/waf/nac-logconfs/test-ns_test-name test-dst"},
+			},
+			msg: "app protect policy and log conf",
+		},
+	}
+
+	conf, err := createTestConfigurator()
+	if err != nil {
+		t.Errorf("Failed to create a test configurator: %v", err)
+	}
+
+	for _, test := range tests {
+		result := conf.updateApResources(test.ingEx)
+		if !reflect.DeepEqual(result, test.expected) {
+			t.Errorf("updateApResources() returned \n%v but exexpected\n%v for the case of %s", result, test.expected, test.msg)
+		}
+	}
+}
+
+func TestUpdateApResourcesForVs(t *testing.T) {
+	apPolRefs := map[string]*unstructured.Unstructured{
+		"test-ns-1/test-name-1": {
+			Object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "test-ns-1",
+					"name":      "test-name-1",
+				},
+			},
+		},
+		"test-ns-2/test-name-2": {
+			Object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "test-ns-2",
+					"name":      "test-name-2",
+				},
+			},
+		},
+	}
+	logConfRefs := map[string]*unstructured.Unstructured{
+		"test-ns-1/test-name-1": {
+			Object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "test-ns-1",
+					"name":      "test-name-1",
+				},
+			},
+		},
+		"test-ns-2/test-name-2": {
+			Object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "test-ns-2",
+					"name":      "test-name-2",
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		vsEx     *VirtualServerEx
+		expected map[string]string
+		msg      string
+	}{
+		{
+			vsEx: &VirtualServerEx{
+				VirtualServer: &conf_v1.VirtualServer{
+					ObjectMeta: meta_v1.ObjectMeta{},
+				},
+			},
+			expected: map[string]string{},
+			msg:      "no app protect resources",
+		},
+		{
+			vsEx: &VirtualServerEx{
+				VirtualServer: &conf_v1.VirtualServer{
+					ObjectMeta: meta_v1.ObjectMeta{},
+				},
+				ApPolRefs: apPolRefs,
+			},
+			expected: map[string]string{
+				"test-ns-1/test-name-1": "/etc/nginx/waf/nac-policies/test-ns-1_test-name-1",
+				"test-ns-2/test-name-2": "/etc/nginx/waf/nac-policies/test-ns-2_test-name-2",
+			},
+			msg: "app protect policies",
+		},
+		{
+			vsEx: &VirtualServerEx{
+				VirtualServer: &conf_v1.VirtualServer{
+					ObjectMeta: meta_v1.ObjectMeta{},
+				},
+				LogConfRefs: logConfRefs,
+			},
+			expected: map[string]string{
+				"test-ns-1/test-name-1": "/etc/nginx/waf/nac-logconfs/test-ns-1_test-name-1",
+				"test-ns-2/test-name-2": "/etc/nginx/waf/nac-logconfs/test-ns-2_test-name-2",
+			},
+			msg: "app protect log confs",
+		},
+		{
+			vsEx: &VirtualServerEx{
+				VirtualServer: &conf_v1.VirtualServer{
+					ObjectMeta: meta_v1.ObjectMeta{},
+				},
+				ApPolRefs:   apPolRefs,
+				LogConfRefs: logConfRefs,
+			},
+			expected: map[string]string{
+				// this is a bug - the result needs to include both policies and log confs
+				"test-ns-1/test-name-1": "/etc/nginx/waf/nac-logconfs/test-ns-1_test-name-1",
+				"test-ns-2/test-name-2": "/etc/nginx/waf/nac-logconfs/test-ns-2_test-name-2",
+			},
+			msg: "app protect policies and log confs",
+		},
+	}
+
+	conf, err := createTestConfigurator()
+	if err != nil {
+		t.Errorf("Failed to create a test configurator: %v", err)
+	}
+
+	for _, test := range tests {
+		result := conf.updateApResourcesForVs(test.vsEx)
+		if !reflect.DeepEqual(result, test.expected) {
+			t.Errorf("updateApResourcesForVs() returned \n%v but exexpected\n%v for the case of %s", result, test.expected, test.msg)
+		}
 	}
 }

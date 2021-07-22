@@ -69,7 +69,7 @@ type Server struct {
 	SSL                   bool
 	SSLCertificate        string
 	SSLCertificateKey     string
-	SSLCiphers            string
+	SSLRejectHandshake    bool
 	TLSPassthrough        bool
 	GRPCOnly              bool
 	StatusZone            string
@@ -97,7 +97,7 @@ type Server struct {
 	SSLPorts            []int
 	AppProtectEnable    string
 	AppProtectPolicy    string
-	AppProtectLogConf   string
+	AppProtectLogConfs  []string
 	AppProtectLogEnable string
 
 	SpiffeCerts bool
@@ -174,6 +174,7 @@ type MainConfig struct {
 	ServerNamesHashBucketSize          string
 	ServerNamesHashMaxSize             string
 	ServerTokens                       string
+	SSLRejectHandshake                 bool
 	SSLCiphers                         string
 	SSLDHParam                         string
 	SSLPreferServerCiphers             bool
@@ -192,6 +193,7 @@ type MainConfig struct {
 	WorkerShutdownTimeout              string
 	AppProtectLoadModule               bool
 	AppProtectFailureModeAction        string
+	AppProtectCompressedRequestsAction string
 	AppProtectCookieSeed               string
 	AppProtectCPUThresholds            string
 	AppProtectPhysicalMemoryThresholds string

@@ -507,7 +507,7 @@ func TestFindProbeForPods(t *testing.T) {
 
 func TestGetServicePortForIngressPort(t *testing.T) {
 	fakeClient := fake.NewSimpleClientset()
-	cnf := configs.NewConfigurator(&nginx.LocalManager{}, &configs.StaticConfigParams{}, &configs.ConfigParams{}, &configs.GlobalConfigParams{}, &version1.TemplateExecutor{}, &version2.TemplateExecutor{}, false, false, nil, false, nil, false)
+	cnf := configs.NewConfigurator(&nginx.LocalManager{}, &configs.StaticConfigParams{}, &configs.ConfigParams{}, &version1.TemplateExecutor{}, &version2.TemplateExecutor{}, false, false, nil, false, nil, false)
 	lbc := LoadBalancerController{
 		client:           fakeClient,
 		ingressClass:     "nginx",
@@ -767,8 +767,8 @@ func TestGetPolicies(t *testing.T) {
 	if !reflect.DeepEqual(result, expectedPolicies) {
 		t.Errorf("lbc.getPolicies() returned \n%v but \nexpected %v", result, expectedPolicies)
 	}
-	if !reflect.DeepEqual(errors, expectedErrors) {
-		t.Errorf("lbc.getPolicies() returned \n%v but expected \n%v", errors, expectedErrors)
+	if diff := cmp.Diff(expectedErrors, errors, cmp.Comparer(errorComparer)); diff != "" {
+		t.Errorf("lbc.getPolicies() mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -1173,7 +1173,7 @@ func TestFindPoliciesForSecret(t *testing.T) {
 
 func errorComparer(e1, e2 error) bool {
 	if e1 == nil || e2 == nil {
-		return e1 == e2
+		return errors.Is(e1, e2)
 	}
 
 	return e1.Error() == e2.Error()
@@ -2049,5 +2049,46 @@ func TestGetWAFPoliciesForAppProtectLogConf(t *testing.T) {
 		if diff := cmp.Diff(test.want, got); diff != "" {
 			t.Errorf("getWAFPoliciesForAppProtectLogConf() returned unexpected result for the case of: %v (-want +got):\n%s", test.msg, diff)
 		}
+	}
+}
+
+func TestPreSyncSecrets(t *testing.T) {
+	lbc := LoadBalancerController{
+		isNginxPlus: true,
+		secretStore: secrets.NewEmptyFakeSecretsStore(),
+		secretLister: &cache.FakeCustomStore{
+			ListFunc: func() []interface{} {
+				return []interface{}{
+					&api_v1.Secret{
+						ObjectMeta: meta_v1.ObjectMeta{
+							Name:      "supported-secret",
+							Namespace: "default",
+						},
+						Type: api_v1.SecretTypeTLS,
+					},
+					&api_v1.Secret{
+						ObjectMeta: meta_v1.ObjectMeta{
+							Name:      "unsupported-secret",
+							Namespace: "default",
+						},
+						Type: api_v1.SecretTypeOpaque,
+					},
+				}
+			},
+		},
+	}
+
+	lbc.preSyncSecrets()
+
+	supportedKey := "default/supported-secret"
+	ref := lbc.secretStore.GetSecret(supportedKey)
+	if ref.Error != nil {
+		t.Errorf("GetSecret(%q) returned a reference with an unexpected error %v", supportedKey, ref.Error)
+	}
+
+	unsupportedKey := "default/unsupported-secret"
+	ref = lbc.secretStore.GetSecret(unsupportedKey)
+	if ref.Error == nil {
+		t.Errorf("GetSecret(%q) returned a reference without an expected error", unsupportedKey)
 	}
 }

@@ -1,5 +1,7 @@
-import requests, logging
-import pytest, json
+import requests
+import pytest
+import yaml
+import json
 
 from settings import TEST_DATA, DEPLOYMENTS
 from suite.custom_resources_utils import (
@@ -16,20 +18,21 @@ from suite.resources_utils import (
     delete_items_from_yaml,
     delete_common_app,
     ensure_connection_to_public_endpoint,
+    create_ingress,
     create_ingress_with_ap_annotations,
     ensure_response_from_backend,
     wait_before_test,
-    get_events,
     get_ingress_nginx_template_conf,
     get_first_pod_name,
     get_file_contents,
+    get_service_endpoint,
+    get_last_reload_time,
+    get_test_file_name,
+    write_to_json,
 )
 from suite.custom_resources_utils import (
-    read_ap_crd,
-    create_crd_from_yaml,
-    delete_crd,
+    read_ap_custom_resource,
     create_ap_usersig_from_yaml,
-    delete_ap_usersig,
     delete_and_create_ap_policy_from_yaml,
 )
 from suite.yaml_utils import get_first_ingress_host_from_yaml, get_name_from_yaml
@@ -37,12 +40,13 @@ from suite.yaml_utils import get_first_ingress_host_from_yaml, get_name_from_yam
 src_ing_yaml = f"{TEST_DATA}/appprotect/appprotect-ingress.yaml"
 ap_policy = "dataguard-alarm"
 ap_policy_uds = "dataguard-alarm-uds"
-uds_crd = f"{DEPLOYMENTS}/common/crds-v1beta1/appprotect.f5.com_apusersigs.yaml"
+uds_crd = f"{DEPLOYMENTS}/common/crds/appprotect.f5.com_apusersigs.yaml"
 uds_crd_resource = f"{TEST_DATA}/appprotect/ap-ic-uds.yaml"
 valid_resp_addr = "Server address:"
 valid_resp_name = "Server name:"
 invalid_resp_title = "Request Rejected"
 invalid_resp_body = "The requested URL was rejected. Please consult with your administrator."
+reload_times = {}
 
 
 class AppProtectSetup:
@@ -50,10 +54,12 @@ class AppProtectSetup:
     Encapsulate the example details.
     Attributes:
         req_url (str):
+        metrics_url (str):
     """
 
-    def __init__(self, req_url):
+    def __init__(self, req_url, metrics_url):
         self.req_url = req_url
+        self.metrics_url = metrics_url
 
 
 @pytest.fixture(scope="class")
@@ -72,6 +78,7 @@ def appprotect_setup(
     print("------------------------- Deploy simple backend application -------------------------")
     create_example_app(kube_apis, "simple", test_namespace)
     req_url = f"https://{ingress_controller_endpoint.public_ip}:{ingress_controller_endpoint.port_ssl}/backend1"
+    metrics_url = f"http://{ingress_controller_endpoint.public_ip}:{ingress_controller_endpoint.metrics_port}/metrics"
     wait_until_all_pods_are_ready(kube_apis.v1, test_namespace)
     ensure_connection_to_public_endpoint(
         ingress_controller_endpoint.public_ip,
@@ -98,10 +105,14 @@ def appprotect_setup(
         delete_common_app(kube_apis, "simple", test_namespace)
         src_sec_yaml = f"{TEST_DATA}/appprotect/appprotect-secret.yaml"
         delete_items_from_yaml(kube_apis, src_sec_yaml, test_namespace)
+        write_to_json(
+            f"reload-{get_test_file_name(request.node.fspath)}.json",
+            reload_times
+        )
 
     request.addfinalizer(fin)
 
-    return AppProtectSetup(req_url)
+    return AppProtectSetup(req_url, metrics_url)
 
 
 def assert_ap_crd_info(ap_crd_info, policy_name) -> None:
@@ -142,7 +153,15 @@ def assert_valid_responses(response) -> None:
 @pytest.mark.appprotect
 @pytest.mark.parametrize(
     "crd_ingress_controller_with_ap",
-    [{"extra_args": [f"-enable-custom-resources", f"-enable-app-protect"]}],
+    [
+        {
+            "extra_args": [
+                f"-enable-custom-resources",
+                f"-enable-app-protect",
+                f"-enable-prometheus-metrics",
+            ]
+        }
+    ],
     indirect=["crd_ingress_controller_with_ap"],
 )
 class TestAppProtect:
@@ -163,7 +182,9 @@ class TestAppProtect:
             kube_apis, src_ing_yaml, test_namespace, ap_policy, "True", "True", "127.0.0.1:514"
         )
 
-        wait_before_test(40)
+        ingress_host = get_first_ingress_host_from_yaml(src_ing_yaml)
+        ensure_response_from_backend(appprotect_setup.req_url, ingress_host, check404=True)
+
         pod_name = get_first_pod_name(kube_apis.v1, "nginx-ingress")
 
         result_conf = get_ingress_nginx_template_conf(
@@ -188,10 +209,11 @@ class TestAppProtect:
 
         print("--------- Run test while AppProtect module is enabled with correct policy ---------")
 
-        ap_crd_info = read_ap_crd(kube_apis.custom_objects, test_namespace, "appolicies", ap_policy)
+        ap_crd_info = read_ap_custom_resource(
+            kube_apis.custom_objects, test_namespace, "appolicies", ap_policy
+        )
         assert_ap_crd_info(ap_crd_info, ap_policy)
-        wait_before_test(40)
-        ensure_response_from_backend(appprotect_setup.req_url, ingress_host)
+        ensure_response_from_backend(appprotect_setup.req_url, ingress_host, check404=True)
 
         print("----------------------- Send request ----------------------")
         response = requests.get(
@@ -216,10 +238,11 @@ class TestAppProtect:
             "--------- Run test while AppProtect module is disabled with correct policy ---------"
         )
 
-        ap_crd_info = read_ap_crd(kube_apis.custom_objects, test_namespace, "appolicies", ap_policy)
+        ap_crd_info = read_ap_custom_resource(
+            kube_apis.custom_objects, test_namespace, "appolicies", ap_policy
+        )
         assert_ap_crd_info(ap_crd_info, ap_policy)
-        wait_before_test(40)
-        ensure_response_from_backend(appprotect_setup.req_url, ingress_host)
+        ensure_response_from_backend(appprotect_setup.req_url, ingress_host, check404=True)
 
         print("----------------------- Send request ----------------------")
         response = requests.get(
@@ -250,8 +273,7 @@ class TestAppProtect:
             "--------- Run test while AppProtect module is enabled with incorrect policy ---------"
         )
 
-        wait_before_test(40)
-        ensure_response_from_backend(appprotect_setup.req_url, ingress_host)
+        ensure_response_from_backend(appprotect_setup.req_url, ingress_host, check404=True)
 
         print("----------------------- Send request ----------------------")
         response = requests.get(
@@ -282,8 +304,7 @@ class TestAppProtect:
             "--------- Run test while AppProtect module is disabled with incorrect policy ---------"
         )
 
-        wait_before_test(40)
-        ensure_response_from_backend(appprotect_setup.req_url, ingress_host)
+        ensure_response_from_backend(appprotect_setup.req_url, ingress_host, check404=True)
 
         print("----------------------- Send request ----------------------")
         response = requests.get(
@@ -304,13 +325,7 @@ class TestAppProtect:
 
         create_items_from_yaml(kube_apis, src_syslog_yaml, test_namespace)
 
-        wait_before_test(40)
-        syslog_ep = (
-            kube_apis.v1.read_namespaced_endpoints("syslog-svc", test_namespace)
-            .subsets[0]
-            .addresses[0]
-            .ip
-        )
+        syslog_ep = get_service_endpoint(kube_apis, "syslog-svc", test_namespace)
 
         # items[-1] because syslog pod is last one to spin-up
         syslog_pod = kube_apis.v1.list_namespaced_pod(test_namespace).items[-1].metadata.name
@@ -322,25 +337,22 @@ class TestAppProtect:
 
         print("--------- Run test while AppProtect module is enabled with correct policy ---------")
 
-        wait_before_test(40)
-        ensure_response_from_backend(appprotect_setup.req_url, ingress_host)
+        ensure_response_from_backend(appprotect_setup.req_url, ingress_host, check404=True)
 
         print("----------------------- Send invalid request ----------------------")
-        response = requests.get(
+        response_block = requests.get(
             appprotect_setup.req_url + "/<script>", headers={"host": ingress_host}, verify=False
         )
-        print(response.text)
-        wait_before_test(5)
-        log_contents = get_file_contents(kube_apis.v1, log_loc, syslog_pod, test_namespace)
-
-        assert_invalid_responses(response)
-        assert (
-            f'ASM:attack_type="Non-browser Client,Abuse of Functionality,Cross Site Scripting (XSS)"'
-            in log_contents
-        )
-        assert f'severity="Critical"' in log_contents
-        assert f'request_status="blocked"' in log_contents
-        assert f'outcome="REJECTED"' in log_contents
+        print(response_block.text)
+        log_contents = ""
+        retry = 0
+        while "ASM:attack_type" not in log_contents and retry <= 30:
+            log_contents_block = get_file_contents(
+                kube_apis.v1, log_loc, syslog_pod, test_namespace
+            )
+            retry += 1
+            wait_before_test(1)
+            print(f"Security log not updated, retrying... #{retry}")
 
         print("----------------------- Send valid request ----------------------")
         headers = {
@@ -349,11 +361,20 @@ class TestAppProtect:
         }
         response = requests.get(appprotect_setup.req_url, headers=headers, verify=False)
         print(response.text)
-        wait_before_test(5)
+        wait_before_test(10)
         log_contents = get_file_contents(kube_apis.v1, log_loc, syslog_pod, test_namespace)
 
         delete_items_from_yaml(kube_apis, src_ing_yaml, test_namespace)
         delete_items_from_yaml(kube_apis, src_syslog_yaml, test_namespace)
+
+        assert_invalid_responses(response_block)
+        assert (
+            f'ASM:attack_type="Non-browser Client,Abuse of Functionality,Cross Site Scripting (XSS)"'
+            in log_contents_block
+        )
+        assert f'severity="Critical"' in log_contents_block
+        assert f'request_status="blocked"' in log_contents_block
+        assert f'outcome="REJECTED"' in log_contents_block
 
         assert_valid_responses(response)
         assert f'ASM:attack_type="N/A"' in log_contents
@@ -361,19 +382,101 @@ class TestAppProtect:
         assert f'request_status="passed"' in log_contents
         assert f'outcome="PASSED"' in log_contents
 
-    @pytest.mark.smoke
+    def test_ap_multi_sec_logs(
+        self, request, kube_apis, crd_ingress_controller_with_ap, appprotect_setup, test_namespace
+    ):
+        """
+        Test corresponding log entries with multiple log destinations (in this case, two syslog servers)
+        """
+        src_syslog_yaml = f"{TEST_DATA}/appprotect/syslog.yaml"
+        src_syslog2_yaml = f"{TEST_DATA}/appprotect/syslog2.yaml"
+        log_loc = f"/var/log/messages"
+
+        print("Create two syslog servers")
+        create_items_from_yaml(kube_apis, src_syslog_yaml, test_namespace)
+        create_items_from_yaml(kube_apis, src_syslog2_yaml, test_namespace)
+
+        syslog_ep = get_service_endpoint(kube_apis, "syslog-svc", test_namespace)
+        syslog2_ep = get_service_endpoint(kube_apis, "syslog2-svc", test_namespace)
+
+        syslog_pod = kube_apis.v1.list_namespaced_pod(test_namespace).items[-2].metadata.name
+        syslog2_pod = kube_apis.v1.list_namespaced_pod(test_namespace).items[-1].metadata.name
+
+        with open(src_ing_yaml) as f:
+            doc = yaml.safe_load(f)
+
+            doc["metadata"]["annotations"]["appprotect.f5.com/app-protect-policy"] = ap_policy
+            doc["metadata"]["annotations"]["appprotect.f5.com/app-protect-enable"] = "True"
+            doc["metadata"]["annotations"][
+                "appprotect.f5.com/app-protect-security-log-enable"
+            ] = "True"
+
+            # both lists need to be the same length, if one of the referenced configs is invalid/non-existent then no logconfs are applied.
+            doc["metadata"]["annotations"][
+                "appprotect.f5.com/app-protect-security-log"
+            ] = f"{test_namespace}/logconf,{test_namespace}/logconf"
+
+            doc["metadata"]["annotations"][
+                "appprotect.f5.com/app-protect-security-log-destination"
+            ] = f"syslog:server={syslog_ep}:514,syslog:server={syslog2_ep}:514"
+
+        create_ingress(kube_apis.extensions_v1_beta1, test_namespace, doc)
+
+        ingress_host = get_first_ingress_host_from_yaml(src_ing_yaml)
+
+        ensure_response_from_backend(appprotect_setup.req_url, ingress_host, check404=True)
+
+        print("----------------------- Send request ----------------------")
+        response = requests.get(
+            appprotect_setup.req_url + "/<script>", headers={"host": ingress_host}, verify=False
+        )
+        print(response.text)
+        log_contents = ""
+        log2_contents = ""
+        retry = 0
+        while (
+            "ASM:attack_type" not in log_contents
+            and "ASM:attack_type" not in log2_contents
+            and retry <= 30
+        ):
+            log_contents = get_file_contents(kube_apis.v1, log_loc, syslog_pod, test_namespace)
+            log2_contents = get_file_contents(kube_apis.v1, log_loc, syslog2_pod, test_namespace)
+            retry += 1
+            wait_before_test(1)
+            print(f"Security log not updated, retrying... #{retry}")
+
+        reload_ms = get_last_reload_time(appprotect_setup.metrics_url, "nginx")
+        print(f"last reload duration: {reload_ms} ms")
+        reload_times[f"{request.node.name}"] = f"last reload duration: {reload_ms} ms"
+
+        delete_items_from_yaml(kube_apis, src_ing_yaml, test_namespace)
+        delete_items_from_yaml(kube_apis, src_syslog_yaml, test_namespace)
+        delete_items_from_yaml(kube_apis, src_syslog2_yaml, test_namespace)
+
+        assert_invalid_responses(response)
+        # check logs in dest. #1 i.e. syslog server #1
+        assert (
+            f'ASM:attack_type="Non-browser Client,Abuse of Functionality,Cross Site Scripting (XSS)"'
+            in log_contents
+            and f'severity="Critical"' in log_contents
+            and f'request_status="blocked"' in log_contents
+            and f'outcome="REJECTED"' in log_contents
+        )
+        # check logs in dest. #2 i.e. syslog server #2
+        assert (
+            f'ASM:attack_type="Non-browser Client,Abuse of Functionality,Cross Site Scripting (XSS)"'
+            in log2_contents
+            and f'severity="Critical"' in log2_contents
+            and f'request_status="blocked"' in log2_contents
+            and f'outcome="REJECTED"' in log2_contents
+        )
+
     def test_ap_enable_true_policy_correct_uds(
-        self, kube_apis, crd_ingress_controller_with_ap, appprotect_setup, test_namespace
+        self, request, kube_apis, crd_ingress_controller_with_ap, appprotect_setup, test_namespace
     ):
         """
         Test request with UDS rule string is rejected while AppProtect with User Defined Signatures is enabled in Ingress
         """
-
-        ap_uds_crd_name = get_name_from_yaml(uds_crd)
-        create_crd_from_yaml(
-            kube_apis.api_extensions_v1_beta1, ap_uds_crd_name, uds_crd,
-        )
-        wait_before_test()
 
         usersig_name = create_ap_usersig_from_yaml(
             kube_apis.custom_objects, uds_crd_resource, test_namespace
@@ -396,16 +499,21 @@ class TestAppProtect:
             "--------- Run test while AppProtect module is enabled with correct policy and UDS ---------"
         )
 
-        ap_crd_info = read_ap_crd(kube_apis.custom_objects, test_namespace, "appolicies", ap_policy)
-        assert_ap_crd_info(ap_crd_info, ap_policy)
-        wait_before_test(120)
+        ap_crd_info = read_ap_custom_resource(
+            kube_apis.custom_objects, test_namespace, "appolicies", ap_policy
+        )
 
-        ensure_response_from_backend(appprotect_setup.req_url, ingress_host)
+        wait_before_test(120)
+        ensure_response_from_backend(appprotect_setup.req_url, ingress_host, check404=True)
         print("----------------------- Send request ----------------------")
         response = requests.get(
             appprotect_setup.req_url, headers={"host": ingress_host}, verify=False, data="kic"
         )
         print(response.text)
+
+        reload_ms = get_last_reload_time(appprotect_setup.metrics_url, "nginx")
+        print(f"last reload duration: {reload_ms} ms")
+        reload_times[f"{request.node.name}"] = f"last reload duration: {reload_ms} ms"
 
         # Restore default dataguard-alarm policy
         delete_and_create_ap_policy_from_yaml(
@@ -414,9 +522,7 @@ class TestAppProtect:
             f"{TEST_DATA}/appprotect/{ap_policy}.yaml",
             test_namespace,
         )
-        delete_ap_usersig(kube_apis.custom_objects, usersig_name, test_namespace)
-        delete_crd(
-            kube_apis.api_extensions_v1_beta1, ap_uds_crd_name,
-        )
         delete_items_from_yaml(kube_apis, src_ing_yaml, test_namespace)
+
+        assert_ap_crd_info(ap_crd_info, ap_policy)
         assert_invalid_responses(response)

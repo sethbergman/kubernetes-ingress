@@ -49,6 +49,7 @@ type ConfigParams struct {
 	AppProtectLogConf                      string
 	AppProtectLogEnable                    string
 	MainAppProtectFailureModeAction        string
+	MainAppProtectCompressedRequestsAction string
 	MainAppProtectCookieSeed               string
 	MainAppProtectCPUThresholds            string
 	MainAppProtectPhysicalMemoryThresholds string
@@ -116,6 +117,7 @@ type StaticConfigParams struct {
 	PodName                        string
 	EnableLatencyMetrics           bool
 	EnablePreviewPolicies          bool
+	SSLRejectHandshake             bool
 }
 
 // GlobalConfigParams holds global configuration parameters. For now, it only holds listeners.

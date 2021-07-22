@@ -17,22 +17,31 @@ import (
 )
 
 const emptyHost = ""
-const appProtectPolicyKey = "policy"
-const appProtectLogConfKey = "logconf"
+
+// AppProtectResources holds namespace names of App Protect resources relavant to an Ingress
+type AppProtectResources struct {
+	AppProtectPolicy   string
+	AppProtectLogconfs []string
+}
+
+// AppProtectLog holds a single pair of log config and log destination
+type AppProtectLog struct {
+	LogConf *unstructured.Unstructured
+	Dest    string
+}
 
 // IngressEx holds an Ingress along with the resources that are referenced in this Ingress.
 type IngressEx struct {
-	Ingress           *networking.Ingress
-	Endpoints         map[string][]string
-	HealthChecks      map[string]*api_v1.Probe
-	ExternalNameSvcs  map[string]bool
-	PodsByIP          map[string]PodInfo
-	ValidHosts        map[string]bool
-	ValidMinionPaths  map[string]bool
-	AppProtectPolicy  *unstructured.Unstructured
-	AppProtectLogConf *unstructured.Unstructured
-	AppProtectLogDst  string
-	SecretRefs        map[string]*secrets.SecretReference
+	Ingress          *networking.Ingress
+	Endpoints        map[string][]string
+	HealthChecks     map[string]*api_v1.Probe
+	ExternalNameSvcs map[string]bool
+	PodsByIP         map[string]PodInfo
+	ValidHosts       map[string]bool
+	ValidMinionPaths map[string]bool
+	AppProtectPolicy *unstructured.Unstructured
+	AppProtectLogs   []AppProtectLog
+	SecretRefs       map[string]*secrets.SecretReference
 }
 
 // JWTKey represents a secret that holds JSON Web Key.
@@ -55,7 +64,7 @@ type MergeableIngresses struct {
 	Minions []*IngressEx
 }
 
-func generateNginxCfg(ingEx *IngressEx, apResources map[string]string, isMinion bool, baseCfgParams *ConfigParams, isPlus bool,
+func generateNginxCfg(ingEx *IngressEx, apResources AppProtectResources, isMinion bool, baseCfgParams *ConfigParams, isPlus bool,
 	isResolverConfigured bool, staticParams *StaticConfigParams, isWildcardEnabled bool) (version1.IngressNginxConfig, Warnings) {
 	hasAppProtect := staticParams.MainAppProtectLoadModule
 	cfgParams := parseAnnotations(ingEx, baseCfgParams, isPlus, hasAppProtect, staticParams.EnableInternalRoutes)
@@ -139,8 +148,8 @@ func generateNginxCfg(ingEx *IngressEx, apResources map[string]string, isMinion 
 		allWarnings.Add(warnings)
 
 		if hasAppProtect {
-			server.AppProtectPolicy = apResources[appProtectPolicyKey]
-			server.AppProtectLogConf = apResources[appProtectLogConfKey]
+			server.AppProtectPolicy = apResources.AppProtectPolicy
+			server.AppProtectLogConfs = apResources.AppProtectLogconfs
 		}
 
 		if !isMinion && cfgParams.JWTKey != "" {
@@ -313,6 +322,7 @@ func addSSLConfig(server *version1.Server, owner runtime.Object, host string, in
 	}
 
 	var pemFile string
+	var rejectHandshake bool
 
 	if tlsSecret != "" {
 		secretRef := secretRefs[tlsSecret]
@@ -321,10 +331,10 @@ func addSSLConfig(server *version1.Server, owner runtime.Object, host string, in
 			secretType = secretRef.Secret.Type
 		}
 		if secretType != "" && secretType != api_v1.SecretTypeTLS {
-			pemFile = pemFileNameForMissingTLSSecret
+			rejectHandshake = true
 			warnings.AddWarningf(owner, "TLS secret %s is of a wrong type '%s', must be '%s'", tlsSecret, secretType, api_v1.SecretTypeTLS)
 		} else if secretRef.Error != nil {
-			pemFile = pemFileNameForMissingTLSSecret
+			rejectHandshake = true
 			warnings.AddWarningf(owner, "TLS secret %s is invalid: %v", tlsSecret, secretRef.Error)
 		} else {
 			pemFile = secretRef.Path
@@ -332,16 +342,14 @@ func addSSLConfig(server *version1.Server, owner runtime.Object, host string, in
 	} else if isWildcardEnabled {
 		pemFile = pemFileNameForWildcardTLSSecret
 	} else {
-		pemFile = pemFileNameForMissingTLSSecret
+		rejectHandshake = true
 		warnings.AddWarningf(owner, "TLS termination for host '%s' requires specifying a TLS secret or configuring a global wildcard TLS secret", host)
 	}
 
 	server.SSL = true
 	server.SSLCertificate = pemFile
 	server.SSLCertificateKey = pemFile
-	if pemFile == pemFileNameForMissingTLSSecret {
-		server.SSLCiphers = "NULL"
-	}
+	server.SSLRejectHandshake = rejectHandshake
 
 	return warnings
 }
@@ -501,7 +509,7 @@ func upstreamMapToSlice(upstreams map[string]version1.Upstream) []version1.Upstr
 	return result
 }
 
-func generateNginxCfgForMergeableIngresses(mergeableIngs *MergeableIngresses, masterApResources map[string]string,
+func generateNginxCfgForMergeableIngresses(mergeableIngs *MergeableIngresses, masterApResources AppProtectResources,
 	baseCfgParams *ConfigParams, isPlus bool, isResolverConfigured bool, staticParams *StaticConfigParams,
 	isWildcardEnabled bool) (version1.IngressNginxConfig, Warnings) {
 
@@ -559,8 +567,8 @@ func generateNginxCfgForMergeableIngresses(mergeableIngs *MergeableIngresses, ma
 		}
 
 		isMinion := true
-		// App Protect Resources not allowed in minions - pass empty map
-		dummyApResources := make(map[string]string)
+		// App Protect Resources not allowed in minions - pass empty struct
+		dummyApResources := AppProtectResources{}
 		nginxCfg, minionWarnings := generateNginxCfg(minion, dummyApResources, isMinion, baseCfgParams, isPlus, isResolverConfigured, staticParams, isWildcardEnabled)
 		warnings.Add(minionWarnings)
 

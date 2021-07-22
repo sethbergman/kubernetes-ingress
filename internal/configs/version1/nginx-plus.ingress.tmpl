@@ -41,10 +41,11 @@ server {
 	listen {{$port}} ssl{{if $server.HTTP2}} http2{{end}}{{if $server.ProxyProtocol}} proxy_protocol{{end}};
 	{{- end}}
 	{{end}}
+	{{if $server.SSLRejectHandshake}}
+	ssl_reject_handshake on;
+	{{else}}
 	ssl_certificate {{$server.SSLCertificate}};
 	ssl_certificate_key {{$server.SSLCertificateKey}};
-	{{if $server.SSLCiphers}}
-	ssl_ciphers {{$server.SSLCiphers}};
 	{{end}}
 	{{end}}
 	{{end}}
@@ -69,7 +70,8 @@ server {
 	{{- end}}
 	{{- if $server.AppProtectLogEnable}}
 	app_protect_security_log_enable {{$server.AppProtectLogEnable}};
-	{{if $server.AppProtectLogConf}}app_protect_security_log {{$server.AppProtectLogConf}};{{end}}
+	{{range $AppProtectLogConf := $server.AppProtectLogConfs}}app_protect_security_log {{$AppProtectLogConf}};
+	{{end}}
 	{{- end}}
 	
 	{{if not $server.GRPCOnly}}

@@ -1,7 +1,9 @@
 """Describe methods to utilize the kubernetes-client."""
-
+import re
+import os
 import time
 import yaml
+import json
 import pytest
 import requests
 
@@ -11,7 +13,7 @@ from kubernetes.stream import stream
 from kubernetes import client
 from more_itertools import first
 
-from settings import TEST_DATA, RECONFIGURATION_DELAY, DEPLOYMENTS
+from settings import TEST_DATA, RECONFIGURATION_DELAY, DEPLOYMENTS, PROJECT_ROOT
 
 
 class RBACAuthorization:
@@ -111,10 +113,9 @@ def cleanup_rbac(rbac_v1: RbacAuthorizationV1Api, rbac: RBACAuthorization) -> No
     :param rbac: RBACAuthorization
     :return:
     """
-    delete_options = client.V1DeleteOptions()
     print("Delete binding and cluster role")
-    rbac_v1.delete_cluster_role_binding(rbac.binding, delete_options)
-    rbac_v1.delete_cluster_role(rbac.role, delete_options)
+    rbac_v1.delete_cluster_role_binding(rbac.binding)
+    rbac_v1.delete_cluster_role(rbac.role)
 
 
 def create_deployment_from_yaml(apps_v1_api: AppsV1Api, namespace, yaml_manifest) -> str:
@@ -130,6 +131,36 @@ def create_deployment_from_yaml(apps_v1_api: AppsV1Api, namespace, yaml_manifest
     with open(yaml_manifest) as f:
         dep = yaml.safe_load(f)
     return create_deployment(apps_v1_api, namespace, dep)
+
+
+def patch_deployment_from_yaml(apps_v1_api: AppsV1Api, namespace, yaml_manifest) -> str:
+    """
+    Create a deployment based on yaml file.
+
+    :param apps_v1_api: AppsV1Api
+    :param namespace: namespace name
+    :param yaml_manifest: absolute path to file
+    :return: str
+    """
+    print(f"Load {yaml_manifest}")
+    with open(yaml_manifest) as f:
+        dep = yaml.safe_load(f)
+    return patch_deployment(apps_v1_api, namespace, dep)
+
+
+def patch_deployment(apps_v1_api: AppsV1Api, namespace, body) -> str:
+    """
+    Create a deployment based on a dict.
+
+    :param apps_v1_api: AppsV1Api
+    :param namespace: namespace name
+    :param body: dict
+    :return: str
+    """
+    print("Patch a deployment:")
+    apps_v1_api.patch_namespaced_deployment(body['metadata']['name'], namespace, body)
+    print(f"Deployment patched with name '{body['metadata']['name']}'")
+    return body['metadata']['name']
 
 
 def create_deployment(apps_v1_api: AppsV1Api, namespace, body) -> str:
@@ -166,7 +197,7 @@ def create_deployment_with_name(apps_v1_api: AppsV1Api, namespace, name) -> str:
         return create_deployment(apps_v1_api, namespace, dep)
 
 
-def scale_deployment(apps_v1_api: AppsV1Api, name, namespace, value) -> None:
+def scale_deployment(apps_v1_api: AppsV1Api, name, namespace, value) -> int:
     """
     Scale a deployment.
 
@@ -174,13 +205,15 @@ def scale_deployment(apps_v1_api: AppsV1Api, name, namespace, value) -> None:
     :param namespace: namespace name
     :param name: deployment name
     :param value: int
-    :return:
+    :return: original: int the original amount of replicas
     """
     print(f"Scale a deployment '{name}'")
     body = apps_v1_api.read_namespaced_deployment_scale(name, namespace)
+    original = body.spec.replicas
     body.spec.replicas = value
     apps_v1_api.patch_namespaced_deployment_scale(name, namespace, body)
     print(f"Scale a deployment '{name}': complete")
+    return original
 
 
 def create_daemon_set(apps_v1_api: AppsV1Api, namespace, body) -> str:
@@ -197,6 +230,11 @@ def create_daemon_set(apps_v1_api: AppsV1Api, namespace, body) -> str:
     print(f"Daemon-Set created with name '{body['metadata']['name']}'")
     return body['metadata']['name']
 
+class PodNotReadyException(Exception):
+    def __init__(self, message="After several seconds the pods aren't ContainerReady. Exiting!"):
+        self.message = message
+        super().__init__(self.message)
+    
 
 def wait_until_all_pods_are_ready(v1: CoreV1Api, namespace) -> None:
     """
@@ -209,11 +247,11 @@ def wait_until_all_pods_are_ready(v1: CoreV1Api, namespace) -> None:
     print("Start waiting for all pods in a namespace to be ContainersReady")
     counter = 0
     while not are_all_pods_in_ready_state(v1, namespace) and counter < 20:
-        print("There are pods that are not ContainersReady. Wait for 4 sec...")
+        print("There are pods that are not ContainerReady. Wait for 4 sec...")
         time.sleep(4)
         counter = counter + 1
     if counter >= 20:
-        pytest.fail("After several seconds the pods aren't ContainersReady. Exiting...")
+        raise PodNotReadyException()
     print("All pods are ContainersReady")
 
 
@@ -311,7 +349,7 @@ def create_service_with_name(v1: CoreV1Api, namespace, name) -> str:
         return create_service(v1, namespace, dep)
 
 
-def get_service_node_ports(v1: CoreV1Api, name, namespace) -> (int, int, int, int):
+def get_service_node_ports(v1: CoreV1Api, name, namespace) -> (int, int, int, int, int, int):
     """
     Get service allocated node_ports.
 
@@ -321,11 +359,13 @@ def get_service_node_ports(v1: CoreV1Api, name, namespace) -> (int, int, int, in
     :return: (plain_port, ssl_port, api_port, exporter_port)
     """
     resp = v1.read_namespaced_service(name, namespace)
-    assert len(resp.spec.ports) == 4, "An unexpected amount of ports in a service. Check the configuration"
+    if len(resp.spec.ports) == 6:
+        print("An unexpected amount of ports in a service. Check the configuration")
     print(f"Service with an API port: {resp.spec.ports[2].node_port}")
     print(f"Service with an Exporter port: {resp.spec.ports[3].node_port}")
     return resp.spec.ports[0].node_port, resp.spec.ports[1].node_port,\
-        resp.spec.ports[2].node_port, resp.spec.ports[3].node_port
+        resp.spec.ports[2].node_port, resp.spec.ports[3].node_port, resp.spec.ports[4].node_port,\
+        resp.spec.ports[5].node_port
 
 
 def wait_for_public_ip(v1: CoreV1Api, namespace: str) -> str:
@@ -425,11 +465,12 @@ def delete_secret(v1: CoreV1Api, name, namespace) -> None:
     :param namespace: namespace name
     :return:
     """
-    delete_options = client.V1DeleteOptions()
-    delete_options.grace_period_seconds = 0
-    delete_options.propagation_policy = 'Foreground'
+    delete_options = {
+        "grace_period_seconds": 0,
+        "propagation_policy": "Foreground",
+    }
     print(f"Delete a secret: {name}")
-    v1.delete_namespaced_secret(name, namespace, delete_options)
+    v1.delete_namespaced_secret(name, namespace, **delete_options)
     ensure_item_removal(v1.read_namespaced_secret, name, namespace)
     print(f"Secret was removed with name '{name}'")
 
@@ -500,8 +541,7 @@ def delete_ingress(extensions_v1_beta1: ExtensionsV1beta1Api, name, namespace) -
     :return:
     """
     print(f"Delete an ingress: {name}")
-    delete_options = client.V1DeleteOptions()
-    extensions_v1_beta1.delete_namespaced_ingress(name, namespace, delete_options)
+    extensions_v1_beta1.delete_namespaced_ingress(name, namespace)
     ensure_item_removal(extensions_v1_beta1.read_namespaced_ingress, name, namespace)
     print(f"Ingress was removed with name '{name}'")
 
@@ -672,11 +712,12 @@ def delete_configmap(v1: CoreV1Api, name, namespace) -> None:
     :param namespace: namespace name
     :return:
     """
+    delete_options = {
+        "grace_period_seconds": 0,
+        "propagation_policy": "Foreground",
+    }
     print(f"Delete a ConfigMap: {name}")
-    delete_options = client.V1DeleteOptions()
-    delete_options.grace_period_seconds = 0
-    delete_options.propagation_policy = 'Foreground'
-    v1.delete_namespaced_config_map(name, namespace, delete_options)
+    v1.delete_namespaced_config_map(name, namespace, **delete_options)
     ensure_item_removal(v1.read_namespaced_config_map, name, namespace)
     print(f"ConfigMap was removed with name '{name}'")
 
@@ -689,11 +730,12 @@ def delete_namespace(v1: CoreV1Api, namespace) -> None:
     :param namespace: namespace name
     :return:
     """
+    delete_options = {
+        "grace_period_seconds": 0,
+        "propagation_policy": "Foreground",
+    }
     print(f"Delete a namespace: {namespace}")
-    delete_options = client.V1DeleteOptions()
-    delete_options.grace_period_seconds = 0
-    delete_options.propagation_policy = 'Background'
-    v1.delete_namespace(namespace, delete_options)
+    v1.delete_namespace(namespace, **delete_options)
     ensure_item_removal(v1.read_namespace, namespace)
     print(f"Namespace was removed with name '{namespace}'")
 
@@ -749,6 +791,21 @@ def get_ingress_nginx_template_conf(v1: CoreV1Api, ingress_namespace, ingress_na
     return get_file_contents(v1, file_path, pod_name, pod_namespace)
 
 
+def get_ts_nginx_template_conf(v1: CoreV1Api, resource_namespace, resource_name, pod_name, pod_namespace) -> str:
+    """
+    Get contents of /etc/nginx/stream-conf.d/ts_{namespace}-{resource_name}.conf in the pod.
+
+    :param v1: CoreV1Api
+    :param resource_namespace:
+    :param resource_name:
+    :param pod_name:
+    :param pod_namespace:
+    :return: str
+    """
+    file_path = f"/etc/nginx/stream-conf.d/ts_{resource_namespace}_{resource_name}.conf"
+    return get_file_contents(v1, file_path, pod_name, pod_namespace)
+
+
 def create_example_app(kube_apis, app_type, namespace) -> None:
     """
     Create a backend application.
@@ -785,10 +842,7 @@ def delete_service(v1: CoreV1Api, name, namespace) -> None:
     :return:
     """
     print(f"Delete a service: {name}")
-    delete_options = client.V1DeleteOptions()
-    delete_options.grace_period_seconds = 0
-    delete_options.propagation_policy = 'Foreground'
-    v1.delete_namespaced_service(name, namespace, delete_options)
+    v1.delete_namespaced_service(name, namespace)
     ensure_item_removal(v1.read_namespaced_service_status, name, namespace)
     print(f"Service was removed with name '{name}'")
 
@@ -802,11 +856,12 @@ def delete_deployment(apps_v1_api: AppsV1Api, name, namespace) -> None:
     :param namespace:
     :return:
     """
+    delete_options = {
+        "grace_period_seconds": 0,
+        "propagation_policy": "Foreground",
+    }
     print(f"Delete a deployment: {name}")
-    delete_options = client.V1DeleteOptions()
-    delete_options.grace_period_seconds = 0
-    delete_options.propagation_policy = 'Foreground'
-    apps_v1_api.delete_namespaced_deployment(name, namespace, delete_options)
+    apps_v1_api.delete_namespaced_deployment(name, namespace, **delete_options)
     ensure_item_removal(apps_v1_api.read_namespaced_deployment_status, name, namespace)
     print(f"Deployment was removed with name '{name}'")
 
@@ -820,11 +875,12 @@ def delete_daemon_set(apps_v1_api: AppsV1Api, name, namespace) -> None:
     :param namespace:
     :return:
     """
+    delete_options = {
+        "grace_period_seconds": 0,
+        "propagation_policy": "Foreground",
+    }
     print(f"Delete a daemon-set: {name}")
-    delete_options = client.V1DeleteOptions()
-    delete_options.grace_period_seconds = 0
-    delete_options.propagation_policy = 'Foreground'
-    apps_v1_api.delete_namespaced_daemon_set(name, namespace, delete_options)
+    apps_v1_api.delete_namespaced_daemon_set(name, namespace, **delete_options)
     ensure_item_removal(apps_v1_api.read_namespaced_daemon_set_status, name, namespace)
     print(f"Daemon-set was removed with name '{name}'")
 
@@ -839,20 +895,32 @@ def wait_before_test(delay=RECONFIGURATION_DELAY) -> None:
     time.sleep(delay)
 
 
-def wait_for_event_increment(kube_apis, namespace, event_count) -> bool:
-    counter = 0
-    print(f"\nCurrent event count: {event_count}")
-    while counter < 30:
-        time.sleep(2)
-        counter = counter + 1
+def wait_for_event_increment(kube_apis, namespace, event_count, offset) -> bool:
+    """
+    Wait for event count to increase.
+
+    :param kube_apis: Kubernates API
+    :param namespace: event namespace
+    :param event_count: Current even count
+    :param offset: Number of events generated by last operation
+    :return:
+    """
+    print(f"Current count: {event_count}")
+    updated_event_count = len(get_events(kube_apis.v1, namespace))
+    retry = 0
+    while(updated_event_count != (event_count+offset) and retry < 30 ):
+        time.sleep(1)
+        retry += 1
         updated_event_count = len(get_events(kube_apis.v1, namespace))
-        if updated_event_count == (event_count + 1):
-            print(f"\nCurrent event count: {updated_event_count}")
-            print(f"Update took {counter+1} retries at 2 seconds intervals")
-            return True
-        else:
-            continue
-    return False
+        print(f"Updated count: {updated_event_count}")
+        print(f"Event not registered, Retry #{retry}..")
+    if (updated_event_count == (event_count+offset)):
+        return True
+    else:
+        print(f"Event was not registered after {retry} retries, exiting...")
+        return False
+    
+
 
 
 def create_ingress_controller(v1: CoreV1Api, apps_v1_api: AppsV1Api, cli_arguments,
@@ -880,6 +948,7 @@ def create_ingress_controller(v1: CoreV1Api, apps_v1_api: AppsV1Api, cli_argumen
     else:
         name = create_daemon_set(apps_v1_api, namespace, dep)
     wait_until_all_pods_are_ready(v1, namespace)
+
     print(f"Ingress Controller was created with name '{name}'")
     return name
 
@@ -1039,7 +1108,7 @@ def delete_items_from_yaml(kube_apis, yaml_manifest, namespace) -> None:
                 delete_configmap(kube_apis.v1, doc['metadata']['name'], namespace)
 
 
-def ensure_connection(request_url, expected_code=404) -> None:
+def ensure_connection(request_url, expected_code=404, headers={}) -> None:
     """
     Wait for connection.
 
@@ -1047,9 +1116,9 @@ def ensure_connection(request_url, expected_code=404) -> None:
     :param expected_code: response code
     :return:
     """
-    for _ in range(4):
+    for _ in range(10):
         try:
-            resp = requests.get(request_url, verify=False)
+            resp = requests.get(request_url, headers=headers, verify=False, timeout=5)
             if resp.status_code == expected_code:
                 return
         except Exception as ex:
@@ -1069,7 +1138,6 @@ def ensure_connection_to_public_endpoint(ip_address, port, port_ssl) -> None:
     """
     ensure_connection(f"http://{ip_address}:{port}/")
     ensure_connection(f"https://{ip_address}:{port_ssl}/")
-
 
 def read_service(v1: CoreV1Api, name, namespace) -> V1Service:
     """
@@ -1113,9 +1181,9 @@ def get_events(v1: CoreV1Api, namespace) -> []:
     return res.items
 
 
-def ensure_response_from_backend(req_url, host, additional_headers=None) -> None:
+def ensure_response_from_backend(req_url, host, additional_headers=None, check404=False) -> None:
     """
-    Wait for 502|504 to disappear.
+    Wait for 502|504|404 to disappear.
 
     :param req_url: url to request
     :param host:
@@ -1125,10 +1193,82 @@ def ensure_response_from_backend(req_url, host, additional_headers=None) -> None
     headers = {"host": host}
     if additional_headers:
         headers.update(additional_headers)
-    for _ in range(30):
-        resp = requests.get(req_url, headers=headers, verify=False)
-        if resp.status_code != 502 and resp.status_code != 504:
-            print(f"After {_ * 2} seconds got non 502|504 response. Continue with tests...")
-            return
-        time.sleep(2)
-    pytest.fail(f"Keep getting 502|504 from {req_url} after 60 seconds. Exiting...")
+    
+    if check404:
+        for _ in range(60):
+            resp = requests.get(req_url, headers=headers, verify=False)
+            if resp.status_code != 502 and resp.status_code != 504 and resp.status_code != 404:
+                print(f"After {_} retries at 1 second interval, got {resp.status_code} response. Continue with tests...")
+                return
+            time.sleep(1)
+        pytest.fail(f"Keep getting {resp.status_code} from {req_url} after 60 seconds. Exiting...")
+
+    else:
+        for _ in range(30):
+            resp = requests.get(req_url, headers=headers, verify=False)
+            if resp.status_code != 502 and resp.status_code != 504:
+                print(f"After {_} retries at 1 second interval, got non 502|504 response. Continue with tests...")
+                return
+            time.sleep(1)
+        pytest.fail(f"Keep getting 502|504 from {req_url} after 60 seconds. Exiting...")
+
+def get_service_endpoint(kube_apis, service_name, namespace) -> str:
+    """
+    Wait for endpoint resource to spin up.
+    :param kube_apis: Kubernates API object
+    :param service_name: Service resource name
+    :param namespace: test namespace
+    :return: endpoint ip
+    """
+    found = False
+    retry = 0
+    ep = ""
+    while(not found and retry<40):
+        time.sleep(1)
+        try:
+            ep = (
+                kube_apis.v1.read_namespaced_endpoints(service_name, namespace)
+                    .subsets[0]
+                    .addresses[0]
+                    .ip
+            )
+            found = True
+            print(f"Endpoint IP for {service_name} is {ep}")
+        except TypeError as err:
+            retry += 1
+        except ApiException as ex:
+            if ex.status == 500:
+                print("Reason: Internal server error and Request timed out")
+                raise ApiException
+    return ep
+
+def get_last_reload_time(req_url, ingress_class) -> str:
+    
+    reload_metric = ""
+    print(req_url)
+    ensure_connection(req_url, 200)
+    resp = requests.get(req_url)
+    assert resp.status_code == 200, f"Expected 200 code for /metrics and got {resp.status_code}"
+    resp_content = resp.content.decode("utf-8")
+    for line in resp_content.splitlines():
+        if 'last_reload_milliseconds{class="%s"}' %ingress_class in line:
+            reload_metric = re.findall("\d+", line)[0]
+            return reload_metric
+
+def get_test_file_name(path) -> str:
+    """
+    :param path: full path to the test file
+    """
+    return (str(path).rsplit('/', 1)[-1])[:-3]
+
+def write_to_json(fname, data) -> None:
+    """
+    :param fname: filename.json
+    :param data: dictionary
+    """
+    file_path = f"{PROJECT_ROOT}/json_files/"
+    if os.path.isdir(file_path) == False:
+        os.mkdir(file_path)
+
+    with open(f"json_files/{fname}", "w+") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)

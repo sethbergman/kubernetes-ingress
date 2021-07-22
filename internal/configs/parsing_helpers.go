@@ -23,7 +23,7 @@ func GetMapKeyAsBool(m map[string]string, key string, context apiObject) (bool, 
 	if str, exists := m[key]; exists {
 		b, err := ParseBool(str)
 		if err != nil {
-			return false, exists, fmt.Errorf("%s %v/%v '%s' contains invalid bool: %v, ignoring", context.GetObjectKind().GroupVersionKind().Kind, context.GetNamespace(), context.GetName(), key, err)
+			return false, exists, fmt.Errorf("%s %v/%v '%s' contains invalid bool: %w, ignoring", context.GetObjectKind().GroupVersionKind().Kind, context.GetNamespace(), context.GetName(), key, err)
 		}
 
 		return b, exists, nil
@@ -37,7 +37,7 @@ func GetMapKeyAsInt(m map[string]string, key string, context apiObject) (int, bo
 	if str, exists := m[key]; exists {
 		i, err := ParseInt(str)
 		if err != nil {
-			return 0, exists, fmt.Errorf("%s %v/%v '%s' contains invalid integer: %v, ignoring", context.GetObjectKind().GroupVersionKind().Kind, context.GetNamespace(), context.GetName(), key, err)
+			return 0, exists, fmt.Errorf("%s %v/%v '%s' contains invalid integer: %w, ignoring", context.GetObjectKind().GroupVersionKind().Kind, context.GetNamespace(), context.GetName(), key, err)
 		}
 
 		return i, exists, nil
@@ -51,7 +51,7 @@ func GetMapKeyAsInt64(m map[string]string, key string, context apiObject) (int64
 	if str, exists := m[key]; exists {
 		i, err := ParseInt64(str)
 		if err != nil {
-			return 0, exists, fmt.Errorf("%s %v/%v '%s' contains invalid integer: %v, ignoring", context.GetObjectKind().GroupVersionKind().Kind, context.GetNamespace(), context.GetName(), key, err)
+			return 0, exists, fmt.Errorf("%s %v/%v '%s' contains invalid integer: %w, ignoring", context.GetObjectKind().GroupVersionKind().Kind, context.GetNamespace(), context.GetName(), key, err)
 		}
 
 		return i, exists, nil
@@ -65,7 +65,7 @@ func GetMapKeyAsUint64(m map[string]string, key string, context apiObject, nonZe
 	if str, exists := m[key]; exists {
 		i, err := ParseUint64(str)
 		if err != nil {
-			return 0, exists, fmt.Errorf("%s %v/%v '%s' contains invalid uint64: %v, ignoring", context.GetObjectKind().GroupVersionKind().Kind, context.GetNamespace(), context.GetName(), key, err)
+			return 0, exists, fmt.Errorf("%s %v/%v '%s' contains invalid uint64: %w, ignoring", context.GetObjectKind().GroupVersionKind().Kind, context.GetNamespace(), context.GetName(), key, err)
 		}
 
 		if nonZero && i == 0 {
@@ -154,12 +154,12 @@ func validateHashLBMethod(method string) (string, error) {
 	keyWords := strings.Split(method, " ")
 
 	if keyWords[0] == "hash" {
-		if len(keyWords) == 2 || len(keyWords) == 3 && keyWords[2] == "consistent" {
+		if len(keyWords) == 2 || (len(keyWords) == 3 && keyWords[2] == "consistent") {
 			return method, nil
 		}
 	}
 
-	return "", fmt.Errorf("Invalid load balancing method: %q", method)
+	return "", fmt.Errorf("invalid load balancing method: %q", method)
 }
 
 // ParseBool ensures that the string value is a valid bool
@@ -264,7 +264,7 @@ func ParsePortList(s string) ([]int, error) {
 func parsePort(value string) (int, error) {
 	port, err := strconv.ParseInt(value, 10, 16)
 	if err != nil {
-		return 0, fmt.Errorf("Unable to parse port as integer: %s", err)
+		return 0, fmt.Errorf("Unable to parse port as integer: %w", err)
 	}
 
 	if port <= 0 {
@@ -344,8 +344,10 @@ func parseRewrites(service string) (serviceName string, rewrite string, err erro
 	return svcNameParts[1], rwPathParts[1], nil
 }
 
-var threshEx = regexp.MustCompile(`high=([1-9]|[1-9][0-9]|100) low=([1-9]|[1-9][0-9]|100)\b`)
-var threshExR = regexp.MustCompile(`low=([1-9]|[1-9][0-9]|100) high=([1-9]|[1-9][0-9]|100)\b`)
+var (
+	threshEx  = regexp.MustCompile(`high=([1-9]|[1-9][0-9]|100) low=([1-9]|[1-9][0-9]|100)\b`)
+	threshExR = regexp.MustCompile(`low=([1-9]|[1-9][0-9]|100) high=([1-9]|[1-9][0-9]|100)\b`)
+)
 
 // VerifyAppProtectThresholds ensures that threshold values are set correctly
 func VerifyAppProtectThresholds(value string) bool {

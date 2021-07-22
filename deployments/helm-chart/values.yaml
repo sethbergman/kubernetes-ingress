@@ -10,9 +10,7 @@ controller:
   nginxplus: false
 
   # Timeout in milliseconds which the Ingress Controller will wait for a successful NGINX reload after a change or at the initial start.
-  # Default is 4000 (default is 20000 instead if enable-app-protect is true)
-  # If set to 0, default values will be used.
-  nginxReloadTimeout: 0
+  nginxReloadTimeout: 60000
 
   ## Support for App Protect
   appprotect:
@@ -36,7 +34,7 @@ controller:
     repository: nginx/nginx-ingress
 
     ## The tag of the Ingress controller image.
-    tag: "edge"
+    tag: "1.12.0"
 
     ## The pull policy for the Ingress controller image.
     pullPolicy: IfNotPresent
@@ -168,7 +166,7 @@ controller:
       #   port: 5353
       #   protocol: TCP
 
-  ## Enable custom NGINX configuration snippets in VirtualServer and VirtualServerRoute resources.
+  ## Enable custom NGINX configuration snippets in VirtualServer, VirtualServerRoute and TransportServer resources.
   enableSnippets: false
 
   ## Add a location based on the value of health-status-uri to the default server. The location responds with the 200 status code for any request.
@@ -310,3 +308,9 @@ prometheus:
 
   ## Configures the port to scrape the metrics.
   port: 9113
+
+  ## Specifies the namespace/name of a Kubernetes TLS Secret which will be used to protect the Prometheus endpoint.
+  secret: ""
+
+  ## Configures the HTTP scheme used.
+  scheme: http
